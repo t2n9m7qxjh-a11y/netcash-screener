@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>ネットキャッシュ計算（スクリーナー完成版）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: system-ui, sans-serif; background:#f7f7f7; padding:20px; }
+    .card { max-width:760px; margin:auto; background:#fff; border-radius:12px; padding:20px; box-shadow:0 4px 12px rgba(0,0,0,.08);}    
+    h1 { font-size:1.2rem; margin-bottom:10px; }
+    label { display:block; margin-top:10px; font-weight:600; }
+    input, select, textarea, button {
+      width:100%; padding:8px; margin-top:4px;
+      border-radius:6px; border:1px solid #ccc;
+    }
+    button { cursor:pointer; background:#2563eb; color:#fff; border:none; font-weight:600; }
+    button.secondary { background:#555; }
+    button.small { padding:4px 8px; font-size:0.8rem; }
+    textarea { resize:vertical; }
+    .row { display:flex; gap:8px; }
+    .row > * { flex:1; }
+    .result { margin-top:16px; padding:12px; background:#f0f4ff; border-radius:8px; }
+    .good { color:#0a7a32; background:#e6f6ec; padding:2px 6px; border-radius:6px; }
+    .bad { color:#8a1c1c; background:#fdeaea; padding:2px 6px; border-radius:6px; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { border:1px solid #ccc; padding:6px; font-size:0.9rem; }
+    th { background:#eee; cursor:pointer; }
+    .star { cursor:pointer; font-size:1.1rem; }
+    .filters { background:#fafafa; padding:10px; border-radius:8px; margin-top:12px; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>ネットキャッシュ・スクリーナー</h1>
+
+  <label>銘柄名</label>
+  <input id="stockName">
+
+  <label>PER</label>
+  <input id="per" type="number" step="0.1">
+
+  <label>現金・預金</label>
+  <div class="row"><input id="cash" type="number"><select id="cashUnit"><option value="1">円</option><option value="1000000">百万円</option><option value="100000000">億円</option></select></div>
+
+  <label>有利子負債</label>
+  <div class="row"><input id="debt" type="number"><select id="debtUnit"><option value="1">円</option><option value="1000000">百万円</option><option value="100000000">億円</option></select></div>
+
+  <label>時価総額</label>
+  <div class="row"><input id="marketCap" type="number"><select id="marketUnit"><option value="1">円</option><option value="1000000">百万円</option><option value="100000000">億円</option></select></div>
+
+  <label>メモ</label>
+  <textarea id="memo" rows="2"></textarea>
+
+  <button onclick="calculate()">計算して保存</button>
+
+  <div class="filters">
+    <strong>表示フィルタ</strong>
+    <div class="row">
+      <button class="secondary small" onclick="toggleFavOnly()">★のみ表示</button>
+      <input id="condRatio" type="number" step="0.1" placeholder="倍率 上限">
+      <input id="condShare" type="number" step="1" placeholder="比率 下限%">
+      <button class="small" onclick="renderTable()">条件適用</button>
+    </div>
+  </div>
+
+  <button class="secondary" onclick="renderTable()">一覧を見る</button>
+
+  <div class="result" id="result" style="display:none"></div>
+  <div id="tableArea"></div>
+</div>
+
+<script>
+let history = JSON.parse(localStorage.getItem('ncHistory') || '[]');
+let sortKey = null, sortAsc = true, favOnly = false;
+
+function calculate() {
+  const stockName = stockNameEl.value;
+  const per = Number(perEl.value);
+  const cash = Number(cashEl.value) * Number(cashUnit.value);
+  const debt = Number(debtEl.value) * Number(debtUnit.value);
+  const marketCap = Number(marketCapEl.value) * Number(marketUnit.value);
+  const memo = memoEl.value;
+  const netCash = cash - debt;
+
+  let ratio=null, share=null;
+  if (netCash>0 && marketCap>0) {
+    ratio = marketCap/netCash;
+    share = netCash/marketCap*100;
+  }
+
+  history.push({id:Date.now(), stockName, per, netCash, ratio, share, memo, fav:false});
+  localStorage.setItem('ncHistory', JSON.stringify(history));
+
+  result.innerHTML = `<strong>${stockName}</strong> を保存しました`;
+  result.style.display='block';
+}
+
+function toggleFavOnly(){ favOnly=!favOnly; renderTable(); }
+
+function renderTable(){
+  let data=[...history];
+  const maxRatio = Number(document.getElementById('condRatio').value);
+  const minShare = Number(document.getElementById('condShare').value);
+
+  if (favOnly) data=data.filter(d=>d.fav);
+  if (maxRatio) data=data.filter(d=>d.ratio!==null && d.ratio<=maxRatio);
+  if (minShare) data=data.filter(d=>d.share!==null && d.share>=minShare);
+
+  if (sortKey) data.sort((a,b)=> sortAsc ? (a[sortKey]??0)-(b[sortKey]??0):(b[sortKey]??0)-(a[sortKey]??0));
+
+  let html=`<table><tr><th>★</th><th onclick="setSort('stockName')">銘柄</th><th onclick="setSort('per')">PER</th><th onclick="setSort('netCash')">NC</th><th onclick="setSort('ratio')">倍率</th><th onclick="setSort('share')">比率%</th><th>削除</th></tr>`;
+
+  data.forEach(h=>{
+    const rC=h.ratio!==null&&h.ratio<1?'good':'bad';
+    const sC=h.share!==null&&h.share>=100?'good':'bad';
+    html+=`<tr><td class="star" onclick="toggleFav(${h.id})">${h.fav?'★':'☆'}</td><td>${h.stockName}</td><td>${h.per||'-'}</td><td>${h.netCash.toLocaleString()}</td><td><span class="${rC}">${h.ratio?h.ratio.toFixed(2):'-'}</span></td><td><span class="${sC}">${h.share?h.share.toFixed(1):'-'}</span></td><td><button onclick="removeItem(${h.id})">×</button></td></tr>`;
+  });
+
+  tableArea.innerHTML=html+'</table>';
+}
+
+function setSort(k){ sortKey===k?sortAsc=!sortAsc:(sortKey=k,sortAsc=true); renderTable(); }
+function toggleFav(id){ history=history.map(h=>h.id===id?{...h,fav:!h.fav}:h); localStorage.setItem('ncHistory',JSON.stringify(history)); renderTable(); }
+function removeItem(id){ history=history.filter(h=>h.id!==id); localStorage.setItem('ncHistory',JSON.stringify(history)); renderTable(); }
+
+const stockNameEl=document.getElementById('stockName');
+const perEl=document.getElementById('per');
+const cashEl=document.getElementById('cash');
+const debtEl=document.getElementById('debt');
+const marketCapEl=document.getElementById('marketCap');
+const cashUnit=document.getElementById('cashUnit');
+const debtUnit=document.getElementById('debtUnit');
+const marketUnit=document.getElementById('marketUnit');
+const memoEl=document.getElementById('memo');
+const result=document.getElementById('result');
+const tableArea=document.getElementById('tableArea');
+</script>
+</body>
+</html>
